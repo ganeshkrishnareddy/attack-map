@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Attack Map - Real-Time Global Cyber Threats</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0a0a0f; color: #c9d1d9; font-family: 'SF Mono', Monaco, monospace; overflow: hidden; }
+        
+        #canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }
+        
+        .overlay { position: fixed; z-index: 10; pointer-events: none; }
+        
+        .header { top: 0; left: 0; right: 0; padding: 20px 30px; background: linear-gradient(180deg, rgba(10,10,15,0.95) 0%, transparent 100%); }
+        .header h1 { font-size: 24px; color: #00ff88; text-shadow: 0 0 20px rgba(0,255,136,0.5); }
+        .header p { color: #8b949e; font-size: 12px; margin-top: 5px; }
+        
+        .stats { top: 80px; right: 30px; width: 280px; }
+        .stat-card { background: rgba(22,27,34,0.9); border: 1px solid #30363d; border-radius: 8px; padding: 15px; margin-bottom: 10px; backdrop-filter: blur(10px); }
+        .stat-card h3 { color: #58a6ff; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        .stat-value { font-size: 28px; font-weight: bold; }
+        .stat-value.critical { color: #f85149; }
+        .stat-value.high { color: #d29922; }
+        .stat-value.medium { color: #58a6ff; }
+        .stat-value.low { color: #3fb950; }
+        
+        .feed { bottom: 0; left: 0; right: 0; height: 200px; background: linear-gradient(0deg, rgba(10,10,15,0.95) 0%, transparent 100%); padding: 20px 30px; overflow: hidden; }
+        .feed h3 { color: #00ff88; font-size: 12px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px; }
+        .feed-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 12px; border-bottom: 1px solid rgba(48,54,61,0.3); animation: slideIn 0.3s ease; }
+        .feed-item .type { padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: bold; text-transform: uppercase; }
+        .type.sql { background: rgba(248,81,73,0.2); color: #f85149; }
+        .type.xss { background: rgba(210,153,34,0.2); color: #d29922; }
+        .type.rce { background: rgba(248,81,73,0.3); color: #ff7b72; }
+        .type.ddos { background: rgba(139,148,158,0.2); color: #8b949e; }
+        .type.brute { background: rgba(88,166,255,0.2); color: #58a6ff; }
+        .type.scan { background: rgba(63,185,80,0.2); color: #3fb950; }
+        .feed-item .time { color: #484f58; margin-left: auto; }
+        .feed-item .source { color: #f85149; }
+        .feed-item .target { color: #3fb950; }
+        
+        .legend { bottom: 220px; right: 30px; }
+        .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 11px; }
+        .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+        
+        @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        
+        .pulse { animation: pulse 2s infinite; }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    
+    <div class="overlay header">
+        <h1>GLOBAL CYBER ATTACK MAP</h1>
+        <p>Real-time threat intelligence visualization • <span id="attacker-count" class="pulse">0</span> active threats</p>
+    </div>
+    
+    <div class="overlay stats">
+        <div class="stat-card">
+            <h3>Attacks / min</h3>
+            <div class="stat-value critical" id="attacks-min">0</div>
+        </div>
+        <div class="stat-card">
+            <h3>Critical Vulns</h3>
+            <div class="stat-value critical" id="critical-count">0</div>
+        </div>
+        <div class="stat-card">
+            <h3>Active Sources</h3>
+            <div class="stat-value medium" id="source-count">0</div>
+        </div>
+        <div class="stat-card">
+            <h3>Countries</h3>
+            <div class="stat-value low" id="country-count">0</div>
+        </div>
+    </div>
+    
+    <div class="overlay legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#f85149"></div> SQL Injection</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#d29922"></div> XSS</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#ff7b72"></div> RCE</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#58a6ff"></div> Brute Force</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#3fb950"></div> Port Scan</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#8b949e"></div> DDoS</div>
+    </div>
+    
+    <div class="overlay feed">
+        <h3>Live Threat Feed</h3>
+        <div id="feed-container"></div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        let W, H;
+        function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+        resize();
+        window.addEventListener('resize', resize);
+        
+        // World map points (simplified)
+        const cities = [
+            { x: 0.13, y: 0.32, name: 'New York', country: 'US' },
+            { x: 0.10, y: 0.38, name: 'Los Angeles', country: 'US' },
+            { x: 0.48, y: 0.28, name: 'London', country: 'UK' },
+            { x: 0.52, y: 0.26, name: 'Berlin', country: 'DE' },
+            { x: 0.55, y: 0.30, name: 'Moscow', country: 'RU' },
+            { x: 0.72, y: 0.35, name: 'Beijing', country: 'CN' },
+            { x: 0.75, y: 0.38, name: 'Shanghai', country: 'CN' },
+            { x: 0.78, y: 0.42, name: 'Tokyo', country: 'JP' },
+            { x: 0.65, y: 0.50, name: 'Mumbai', country: 'IN' },
+            { x: 0.50, y: 0.55, name: 'Lagos', country: 'NG' },
+            { x: 0.25, y: 0.60, name: 'São Paulo', country: 'BR' },
+            { x: 0.15, y: 0.35, name: 'Chicago', country: 'US' },
+            { x: 0.58, y: 0.32, name: 'Istanbul', country: 'TR' },
+            { x: 0.62, y: 0.38, name: 'Dubai', country: 'AE' },
+            { x: 0.82, y: 0.65, name: 'Sydney', country: 'AU' },
+            { x: 0.42, y: 0.30, name: 'Paris', country: 'FR' },
+            { x: 0.70, y: 0.30, name: 'Seoul', country: 'KR' },
+            { x: 0.18, y: 0.30, name: 'Toronto', country: 'CA' },
+            { x: 0.53, y: 0.35, name: 'Cairo', country: 'EG' },
+            { x: 0.68, y: 0.45, name: 'Singapore', country: 'SG' },
+        ];
+        
+        const attackTypes = ['sql', 'xss', 'rce', 'brute', 'scan', 'ddos'];
+        const attackColors = { sql: '#f85149', xss: '#d29922', rce: '#ff7b72', brute: '#58a6ff', scan: '#3fb950', ddos: '#8b949e' };
+        
+        let attacks = [];
+        let particles = [];
+        let totalAttacks = 0;
+        let attackRate = 0;
+        let lastAttackTime = Date.now();
+        
+        function createAttack() {
+            const src = cities[Math.floor(Math.random() * cities.length)];
+            let dst = cities[Math.floor(Math.random() * cities.length)];
+            while (dst === src) dst = cities[Math.floor(Math.random() * cities.length)];
+            
+            const type = attackTypes[Math.floor(Math.random() * attackTypes.length)];
+            
+            attacks.push({
+                srcX: src.x * W, srcY: src.y * H,
+                dstX: dst.x * W, dstY: dst.y * H,
+                progress: 0,
+                type,
+                srcName: src.name,
+                dstName: dst.name,
+                srcCountry: src.country,
+                startTime: Date.now()
+            });
+            
+            totalAttacks++;
+            attackRate++;
+            
+            // Add to feed
+            addFeedItem(type, src.name, dst.name, src.country);
+            
+            // Update stats
+            document.getElementById('attacks-min').textContent = attackRate;
+            document.getElementById('critical-count').textContent = Math.floor(totalAttacks * 0.12);
+            document.getElementById('source-count').textContent = Math.min(cities.length, Math.floor(totalAttacks / 5) + 1);
+            document.getElementById('country-count').textContent = Math.min(20, Math.floor(totalAttacks / 8) + 1);
+            document.getElementById('attacker-count').textContent = totalAttacks;
+        }
+        
+        function addFeedItem(type, src, dst, country) {
+            const container = document.getElementById('feed-container');
+            const item = document.createElement('div');
+            item.className = 'feed-item';
+            const time = new Date().toLocaleTimeString();
+            item.innerHTML = `<span class="type ${type}">${type.toUpperCase()}</span> <span class="source">${src}</span> → <span class="target">${dst}</span> <span style="color:#484f58">[${country}]</span> <span class="time">${time}</span>`;
+            container.insertBefore(item, container.firstChild);
+            if (container.children.length > 8) container.removeChild(container.lastChild);
+        }
+        
+        function drawMap() {
+            ctx.fillStyle = 'rgba(10,10,15,0.15)';
+            ctx.fillRect(0, 0, W, H);
+            
+            // Draw grid
+            ctx.strokeStyle = 'rgba(48,54,61,0.3)';
+            ctx.lineWidth = 0.5;
+            for (let x = 0; x < W; x += 50) {
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+            }
+            for (let y = 0; y < H; y += 50) {
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+            }
+            
+            // Draw cities
+            cities.forEach(city => {
+                const x = city.x * W;
+                const y = city.y * H;
+                
+                // Glow
+                const gradient = ctx.createRadialGradient(x, y, 0, x, y, 15);
+                gradient.addColorStop(0, 'rgba(0,255,136,0.3)');
+                gradient.addColorStop(1, 'transparent');
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(x, y, 15, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Dot
+                ctx.fillStyle = '#00ff88';
+                ctx.beginPath();
+                ctx.arc(x, y, 3, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            
+            // Draw attacks
+            attacks.forEach((attack, i) => {
+                attack.progress += 0.015;
+                
+                if (attack.progress >= 1) {
+                    attacks.splice(i, 1);
+                    return;
+                }
+                
+                const x = attack.srcX + (attack.dstX - attack.srcX) * attack.progress;
+                const y = attack.srcY + (attack.dstY - attack.srcY) * attack.progress;
+                
+                // Trail
+                ctx.strokeStyle = attackColors[attack.type];
+                ctx.lineWidth = 2;
+                ctx.globalAlpha = 1 - attack.progress;
+                ctx.beginPath();
+                ctx.moveTo(attack.srcX, attack.srcY);
+                ctx.lineTo(x, y);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+                
+                // Head
+                ctx.fillStyle = attackColors[attack.type];
+                ctx.beginPath();
+                ctx.arc(x, y, 4, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Explosion at destination
+                if (attack.progress > 0.9) {
+                    const explosion = (attack.progress - 0.9) * 10;
+                    ctx.strokeStyle = attackColors[attack.type];
+                    ctx.lineWidth = 1;
+                    ctx.globalAlpha = 1 - explosion;
+                    ctx.beginPath();
+                    ctx.arc(attack.dstX, attack.dstY, explosion * 30, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.globalAlpha = 1;
+                }
+            });
+        }
+        
+        // Generate attacks
+        setInterval(createAttack, 800);
+        setInterval(() => { attackRate = 0; }, 60000);
+        
+        // Animation loop
+        function animate() {
+            drawMap();
+            requestAnimationFrame(animate);
+        }
+        animate();
+        
+        // Initial attacks
+        for (let i = 0; i < 10; i++) setTimeout(createAttack, i * 200);
+    </script>
+</body>
+</html>
